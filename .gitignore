@@ -1,3 +1,6 @@
 .grunt/
 .claude/settings.local.json
 .claude/settings.json
+__pycache__/
+*.pyc
+agent-caveman/bench/runs/
