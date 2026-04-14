@@ -9,12 +9,12 @@ Caveman makes humans talk to Claude in fewer tokens. Agent Caveman makes *Claude
 When you run multi-agent workflows in Claude Code (spawning subagents via the `Agent`/`Task` tool), three things quietly eat tokens:
 
 1. **Subagent responses** — long narrative reports where the orchestrator only needed the facts
-2. **Tool outputs** — verbose `ls -l`, pretty-printed JSON, ANSI colors, trailing whitespace
+2. **WebFetch responses** — in real sessions, WebFetch averages ~7,000 tokens per call and often dominates total token spend; disciplined extraction prompts cut that by an order of magnitude
 3. **Tool schemas** — the full tool list shipped to every subagent, even tools the subagent will never call
 
-Agent Caveman attacks all three. It ships opinionated subagent definitions with minimal tool whitelists and terse output contracts, then uses hooks to measure and compress tool output before it ever reaches the model.
+Agent Caveman attacks all three at the **source**: opinionated subagent definitions with minimal tool whitelists, a strict output contract in each subagent's system prompt, and a skill that teaches the lead agent to route to the right subagent and write tight WebFetch prompts. Hooks measure what each tool call actually costs so you can see what's working.
 
-There's no terseness level to tune. Agent-to-agent channels have no human reader to please, so compression is always set to "as compact as possible while preserving technical substance." Code, commands, paths, file:line references, and error strings are never touched.
+This is not a transport-layer compressor. Claude Code's public hook contract does not allow rewriting the output of built-in tools before the model consumes it, so we don't pretend to. Every reduction you see comes from generating less in the first place.
 
 ## Install
 
@@ -24,7 +24,7 @@ One line, no approval gate — Claude Code plugin marketplaces install from any 
 claude plugin marketplace add carlet0n/agent_caveman && claude plugin install agent-caveman@agent-caveman
 ```
 
-That's it. No mode to enable, no level to pick, no configuration. Hooks register automatically and the `grunt-*` subagents become available to the orchestrator.
+That's it. No mode to enable, no level to pick, no configuration. The `grunt-*` subagents become available to the orchestrator and the measurement hooks register automatically.
 
 > Anthropic does not gate or review user marketplaces — any public GitHub repo works. (There is a separate opt-in curated marketplace Anthropic runs, which accepts submissions via `claude.ai/settings/plugins/submit`.)
 
@@ -34,7 +34,7 @@ To hack on the plugin, point Claude Code at a working copy:
 
 ```bash
 git clone https://github.com/carlet0n/agent_caveman.git
-cd agent-caveman
+cd agent_caveman
 claude --plugin-dir ./agent-caveman
 ```
 
@@ -50,11 +50,20 @@ Nothing to invoke. The system operates on three layers, all automatic:
 | `grunt-explorer`  | Read-only codebase survey | `Read`, `Grep`, `Glob`, `Bash` (inspection only) |
 | `grunt-coder`     | Execute scoped code edits | `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob` |
 
-Each ships a strict output contract in its system prompt (`RESULT / FINDINGS / FILES / NEXT` blocks), so returns are structured facts rather than prose.
+Each ships a strict output contract in its system prompt (`RESULT / FINDINGS / FILES / NEXT` blocks), so returns are structured facts rather than prose. The tool whitelists shrink the schema payload delivered to each subagent — they cannot call tools not listed, and Claude Code does not ship descriptions for tools the subagent lacks.
 
-**2. Tool-output compression.** A `PostToolUse` hook inspects every tool response, applies tool-specific rules (strip ANSI, collapse blank lines, drop `ls -l` metadata columns, trim agent-response preambles and closings), and logs before/after token counts.
+**2. Orchestrator + subagent skills.** Two skills load on-demand:
 
-**3. Measurement.** A `PreToolUse`/`PostToolUse` pair writes one JSONL record per tool call to `.grunt/metrics.jsonl` in whichever project you're working in. You can see what the system is saving at any time:
+- `grunt-orchestrator` — triggers when the lead agent spawns subagents or calls WebFetch. Provides a task-to-subagent routing table and teaches tight extraction prompts ("Return only X as a code block" instead of "Tell me about X"). WebFetch responses shrink dramatically when the prompt asks for the answer, not a summary of the page.
+- `grunt-terse` — can be invoked by any subagent before returning a final report to enforce the `RESULT / FINDINGS / NEXT` format.
+
+**3. Measurement.** A `PreToolUse`/`PostToolUse` pair writes one JSONL record per tool call to `.grunt/metrics.jsonl` in whichever project you're working in. Check your spend in-session:
+
+```
+/agent-caveman:grunt-stats
+```
+
+Or run the underlying script directly:
 
 ```bash
 python3 "$CLAUDE_PLUGIN_ROOT/hooks/grunt_report.py"
@@ -63,28 +72,29 @@ python3 "$CLAUDE_PLUGIN_ROOT/hooks/grunt_report.py"
 Sample output:
 
 ```
-sessions rows: 53  total in≈4873 tok  out≈6913 tok
+sessions rows: 194  total in≈14571 tok  out≈236823 tok
 
 tool                   calls    in_tok   out_tok   avg_out
-Write                      4      2548      2604       651
-Agent                      3       916      1051       350
-Bash                      10       573       783        78
+WebFetch                  28      1009    200843      7172
+Edit                      11      3317     20071      1824
+Agent                      9      2428      2285       253
+Bash                      17      1449      1805       106
 
 subagent return cost (tok per call):
-  general-purpose      n=3 avg=350 max=387
-
-compression potential: 155/3245 tok saved (4.8%)
-  Agent                n=3    735/1051 (70.0%)
-  Bash                 n=5    155/392  (39.5%)
+  general-purpose      n=4 avg=432 max=679
+  claude-code-guide    n=4 avg=308 max=374
+  grunt-*              (structured reports, avg ~250)
 ```
 
 Filter by session with `--session <id>`.
+
+The numbers are character-length-over-four estimates — suitable for comparison across sessions, not for billing.
 
 ## How it works
 
 ### Subagents
 
-`.claude/agents/*.md` defines each subagent with a `tools:` frontmatter whitelist. Claude Code enforces the whitelist — the subagent cannot call tools not listed, so it cannot wander outside its role, and token-heavy tool schemas for unused tools are never delivered.
+`agent-caveman/agents/*.md` defines each subagent with a `tools:` frontmatter whitelist. Claude Code enforces the whitelist, so each subagent's system context only carries schemas for the tools it can actually use.
 
 Each subagent's system prompt enforces a compact report format. The orchestrator gets:
 
@@ -100,52 +110,53 @@ Rather than a three-paragraph narrative that restates the question.
 
 ### Hooks
 
-Two Python hooks wired via the plugin's `hooks/hooks.json`:
+One measurement hook wired via the plugin's `hooks/hooks.json`:
 
 - `grunt_log.py` — records `{tool, input_tokens, output_tokens, metadata}` per call to `.grunt/metrics.jsonl`
-- `grunt_compress.py` — computes compressed form of `tool_response` and logs the delta to `.grunt/compression.jsonl`
 
-Both are pure Python 3 standard library. No dependencies, no network calls. Everything stays local to your project's `.grunt/` directory.
-
-Token counts are character-length-over-four estimates, suitable for relative comparison rather than billing.
+Pure Python 3 standard library. No dependencies, no network calls. Everything stays local to your project's `.grunt/` directory.
 
 ### What we don't do
 
-- **No parameter renaming.** Research showed cryptic names (`file_path` → `p`) save <2% of tokens while measurably hurting tool-call accuracy. Prompt caching on the schema is a better lever.
-- **No cross-session learning.** Metrics are local, per-project, JSONL. Inspect them yourself.
-- **No LLM-based rewriting.** All compression is deterministic regex/text transforms. If you can't reproduce it from the source, it doesn't happen.
+- **No built-in tool output mutation.** Claude Code's hook contract only allows rewriting MCP tool responses (`updatedMCPToolOutput`). Built-in tools — Bash, Read, Edit, WebFetch, Agent — cannot be rewritten before the model sees them. A "compressor" that modified them would be silently ignored, so we don't ship one. All savings are at the source.
+- **No MCP wrapper of built-in tools.** Could technically bypass the above, but wrapping Edit/Read behind our own server disables Claude Code's permission enforcement (e.g. Edit's "must Read first" rule). Not worth the security regression for modest schema savings.
+- **No parameter renaming.** Research showed cryptic names (`file_path` → `p`) save <2% of tokens while measurably hurting tool-call accuracy.
+- **No LLM-based rewriting.** Every reduction is deterministic and inspectable.
+- **No cross-session learning.** Metrics stay local, per-project, JSONL. Inspect them yourself.
 
 ## Repository layout
 
 ```
 .
 ├── .claude-plugin/
-│   └── marketplace.json        # marketplace manifest (discovered by `plugin marketplace add`)
+│   └── marketplace.json        # marketplace manifest
 ├── agent-caveman/              # the plugin itself
 │   ├── .claude-plugin/
 │   │   └── plugin.json         # plugin manifest
 │   ├── hooks/
 │   │   ├── hooks.json          # hook registrations
-│   │   ├── grunt_log.py
-│   │   ├── grunt_compress.py
-│   │   └── grunt_report.py
+│   │   ├── grunt_log.py        # PreToolUse/PostToolUse token logger
+│   │   └── grunt_report.py     # summary CLI
 │   ├── agents/
 │   │   ├── grunt-researcher.md
 │   │   ├── grunt-explorer.md
 │   │   └── grunt-coder.md
-│   └── skills/
-│       └── grunt-terse/
-│           └── SKILL.md
+│   ├── skills/
+│   │   ├── grunt-orchestrator/SKILL.md  # subagent routing + WebFetch prompt discipline
+│   │   └── grunt-terse/SKILL.md         # compact output format for subagent returns
+│   └── commands/
+│       └── grunt-stats.md      # /grunt-stats slash command
 └── README.md
 ```
 
 ## Status
 
-- **Phase 1 — measurement.** Shipped.
-- **Phase 2 — output compression (observer mode).** Shipped.
-- **Phase 3 — per-agent tool whitelists + agent-response compression.** Shipped.
-- **Phase 4 — mutation.** Pending. The compressor currently measures savings without altering what the model sees, because the Claude Code hook contract for mutating tool output is still being verified. Once confirmed, compression becomes a real token reduction.
-- **Phase 5 — MCP schema wrapper.** Optional advanced path for teams wanting true per-agent schema trimming beyond whitelisting.
+| Component | State |
+|-----------|-------|
+| Token measurement hooks + `/grunt-stats` report | Shipped |
+| Three specialized subagents (`grunt-researcher`, `grunt-explorer`, `grunt-coder`) | Shipped |
+| `grunt-orchestrator` skill (subagent routing + WebFetch prompt discipline) | Shipped |
+| `grunt-terse` skill (compact output contract) | Shipped |
 
 ## License
 

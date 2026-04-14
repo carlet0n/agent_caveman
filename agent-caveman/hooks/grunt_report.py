@@ -82,38 +82,6 @@ def main() -> int:
         for name, costs in subagent_cost.items():
             avg = sum(costs) // len(costs)
             print(f"  {name:<20} n={len(costs)} avg={avg} max={max(costs)}")
-
-    # Compression savings.
-    comp_path = project_root() / ".grunt" / "compression.jsonl"
-    if comp_path.exists():
-        orig_by_tool: dict[str, int] = defaultdict(int)
-        saved_by_tool: dict[str, int] = defaultdict(int)
-        n_by_tool: dict[str, int] = defaultdict(int)
-        for line in comp_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                r = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if args.session and r.get("session") != args.session:
-                continue
-            t = r.get("tool") or "?"
-            orig_by_tool[t] += r.get("orig_tok", 0)
-            saved_by_tool[t] += r.get("saved_tok", 0)
-            n_by_tool[t] += 1
-        total_orig = sum(orig_by_tool.values())
-        total_saved = sum(saved_by_tool.values())
-        if total_orig:
-            pct = 100 * total_saved / total_orig
-            print(
-                f"\ncompression potential: {total_saved}/{total_orig} tok saved "
-                f"({pct:.1f}%)"
-            )
-            for t, orig in sorted(orig_by_tool.items(), key=lambda kv: -kv[1]):
-                s = saved_by_tool[t]
-                p = 100 * s / orig if orig else 0
-                print(f"  {t:<20} n={n_by_tool[t]:<4} {s}/{orig} ({p:.1f}%)")
     return 0
 
 
