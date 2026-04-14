@@ -125,7 +125,7 @@ Pure Python 3 standard library. No dependencies, no network calls. Everything st
 
 ### Non-goals
 
-- **Built-in tool output mutation.** Claude Code's hook contract permits post-execution mutation only for MCP tools (`updatedMCPToolOutput`). Built-in tool output — Bash, Read, Edit, WebFetch, Agent — is immutable to hooks.
+- **Built-in tool output mutation.** Claude Code's hook contract permits post-execution mutation only for MCP tools (`updatedMCPToolOutput`); `grunt_mcp_github.py` uses this path. Built-in tool output — Bash, Read, Edit, WebFetch, Agent — is immutable to hooks, so reductions there come from input-side rewrites and subagent output contracts.
 - **MCP wrapping of built-in tools.** Would bypass Claude Code's permission enforcement (e.g. the "Read before Edit" constraint) for modest schema savings.
 - **Parameter renaming.** Shortening argument names (`file_path` → `p`) saves under 2% of tokens and measurably degrades tool-call accuracy.
 - **LLM-based rewriting.** All reductions are deterministic and inspectable.
