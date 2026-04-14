@@ -95,7 +95,20 @@ prompt rewrites applied: 2
   Agent                n=1
 ```
 
-Filter by session with `--session <id>`. Token counts are `len(s)//4` estimates intended for cross-session comparison, not billing reconciliation.
+Filter by session with `--session <id>`. The report leads with **authoritative usage** pulled from Claude Code's own session transcript (`~/.claude/projects/<cwd>/<session>.jsonl`) — real `input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, and `output_tokens` as returned by the API. Pass `--no-transcript` to skip it. The per-tool table below that row is hook-observed `len(s)//4` estimates, useful for comparing tool-by-tool trends but not billing reconciliation. For more accurate per-call numbers, set `GRUNT_TOKENIZER=tiktoken` (needs `pip install tiktoken`) or `GRUNT_TOKENIZER=anthropic` (needs `pip install anthropic` and a configured API key).
+
+### Benchmarking savings
+
+A reproducible A/B harness lives under `agent-caveman/bench/`. Each bench runs the same fixed task twice — once with plugin effects disabled (`GRUNT_REWRITE=off GRUNT_MCP_COMPRESS=off`), once with defaults — into isolated project dirs:
+
+```bash
+./agent-caveman/bench/run.sh agent-caveman/bench/tasks/webfetch_summary.md
+python3 agent-caveman/bench/compare.py \
+  --baseline  agent-caveman/bench/runs/<label>/baseline \
+  --treatment agent-caveman/bench/runs/<label>/treatment
+```
+
+`compare.py` reads each run's Claude Code session transcript and prints side-by-side authoritative usage plus per-tool deltas and plugin-effect counters. See `agent-caveman/bench/README.md` for methodology and caveats (model is non-deterministic; run each task 3–5× and compare medians).
 
 ## How it works
 

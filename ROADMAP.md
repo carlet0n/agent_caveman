@@ -6,6 +6,23 @@ This file is a scratchpad — edit freely, remove items once they ship or are de
 
 ## Shipped
 
+### Authoritative usage readout — `grunt_transcript.py`
+
+`/grunt-stats` now leads with real `input_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens` / `output_tokens` summed from Claude Code's session transcript at `~/.claude/projects/<munged-cwd>/<session>.jsonl`. Char/4 estimates remain below as the per-tool slice.
+
+### Bench harness — `agent-caveman/bench/`
+
+Fixed task prompts (`bench/tasks/*.md`), `run.sh` that executes each task twice into isolated `CLAUDE_PROJECT_DIR`s (baseline: `GRUNT_REWRITE=off GRUNT_MCP_COMPRESS=off`, treatment: defaults), and `compare.py` that diffs the two runs' transcripts plus per-tool hook metrics plus plugin-effect counters.
+
+### Report deltas surfaced
+
+`/grunt-stats` now prints `added_chars` totals for prompt rewrites and `saved_chars` totals for MCP compression (with char→tok estimates), plus a static per-subagent schema footprint line computed from the `tools:` whitelist vs a general-purpose baseline.
+
+### Pluggable tokenizer — `GRUNT_TOKENIZER`
+
+`GRUNT_TOKENIZER=tiktoken` or `=anthropic` swaps the char/4 estimator in `grunt_log.py` for a real tokenizer. Default stays char/4 so install remains dep-free.
+
+
 ### PreToolUse input rewriter — `grunt_rewrite.py`
 
 Auto-appends discipline to `WebFetch.prompt` and `Agent`/`Task.prompt` via `updatedInput`. Loose WebFetch prompts ("tell me about", "summarize", "describe" without "return only"/"code block") get a terse-extraction suffix; Agent prompts missing a response cap get a 200-word contract. Every rewrite logged to `.grunt/rewrites.jsonl` (before/after/rule). Disable with `GRUNT_REWRITE=off`. `/grunt-stats` reports counts by tool and rule.

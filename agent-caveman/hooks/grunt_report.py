@@ -9,6 +9,51 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import grunt_transcript
+
+
+# Rough schema footprint: empirically Claude Code's built-in tool schemas
+# average ~300 tok each once you include description + parameters JSON Schema.
+# A general-purpose subagent inherits ~15 built-in tools; each grunt-* subagent
+# whitelists a subset, so the delta = (15 - whitelist_size) * AVG_SCHEMA_TOK.
+# Number is an estimate — exact schemas vary by Claude Code version.
+AVG_SCHEMA_TOK = 300
+GENERAL_PURPOSE_TOOLS = 15
+
+
+def _parse_whitelist(agent_md: Path) -> list[str]:
+    try:
+        txt = agent_md.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    lines = txt.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return []
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if line.startswith("tools:"):
+            return [t.strip() for t in line.split(":", 1)[1].split(",") if t.strip()]
+    return []
+
+
+def _schema_savings_report(plugin_dir: Path) -> list[str]:
+    agents_dir = plugin_dir / "agents"
+    if not agents_dir.exists():
+        return []
+    lines = []
+    for f in sorted(agents_dir.glob("*.md")):
+        tools = _parse_whitelist(f)
+        if not tools:
+            continue
+        skipped = max(0, GENERAL_PURPOSE_TOOLS - len(tools))
+        saved_tok = skipped * AVG_SCHEMA_TOK
+        lines.append(
+            f"  {f.stem:<22} tools={len(tools):<2} skipped≈{skipped} × "
+            f"{AVG_SCHEMA_TOK}tok = ~{saved_tok} tok saved per spawn"
+        )
+    return lines
+
 
 def project_root() -> Path:
     env = os.environ.get("CLAUDE_PROJECT_DIR")
@@ -100,12 +145,25 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", help="filter by session id")
     ap.add_argument("--top", type=int, default=10)
+    ap.add_argument(
+        "--no-transcript",
+        action="store_true",
+        help="skip authoritative usage readout from Claude Code session transcript",
+    )
     args = ap.parse_args()
 
-    rows = load(project_root() / ".grunt" / "metrics.jsonl", args.session)
+    root = project_root()
+    if not args.no_transcript:
+        tdir = grunt_transcript.transcript_dir(root)
+        totals = grunt_transcript.aggregate(tdir, args.session)
+        print(grunt_transcript.format_report(totals))
+        print()
+
+    rows = load(root / ".grunt" / "metrics.jsonl", args.session)
     if not rows:
-        print("no metrics yet. run some tool calls first.")
+        print("no hook metrics yet. run some tool calls first.")
         return 0
+    print("--- hook-observed tool usage (char/4 estimates) ---")
 
     # Pair Pre/Post by (session, tool, nearest timestamp). Simpler: treat each row
     # independently — PreToolUse gives input cost, PostToolUse gives output cost.
@@ -149,10 +207,11 @@ def main() -> int:
 
     _print_diagnostics(rows)
 
-    rw_path = project_root() / ".grunt" / "rewrites.jsonl"
+    rw_path = root / ".grunt" / "rewrites.jsonl"
     if rw_path.exists():
         by_rule: dict[str, int] = defaultdict(int)
         by_tool: dict[str, int] = defaultdict(int)
+        added_chars = 0
         for line in rw_path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
@@ -164,13 +223,51 @@ def main() -> int:
                 continue
             by_rule[r.get("rule", "?")] += 1
             by_tool[r.get("tool", "?")] += 1
+            added_chars += int(r.get("added_chars") or 0)
         total = sum(by_rule.values())
         if total:
-            print(f"\nprompt rewrites applied: {total}")
+            print(
+                f"\nprompt rewrites applied: {total} "
+                f"(+{added_chars} chars ≈ +{added_chars // 4} input tok; "
+                f"pays for itself when downstream response shrinks more)"
+            )
             for tool, n in sorted(by_tool.items(), key=lambda kv: -kv[1]):
                 print(f"  {tool:<20} n={n}")
             for rule, n in sorted(by_rule.items(), key=lambda kv: -kv[1]):
                 print(f"  rule={rule:<20} n={n}")
+
+    plugin_dir = Path(__file__).resolve().parent.parent
+    savings = _schema_savings_report(plugin_dir)
+    if savings:
+        print("\nsubagent schema footprint (estimated, vs general-purpose):")
+        for line in savings:
+            print(line)
+
+    mcp_path = root / ".grunt" / "mcp_compress.jsonl"
+    if mcp_path.exists():
+        saved_chars = 0
+        calls = 0
+        by_tool_mcp: dict[str, int] = defaultdict(int)
+        for line in mcp_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if args.session and r.get("session") != args.session:
+                continue
+            calls += 1
+            s = int(r.get("saved_chars") or 0)
+            saved_chars += s
+            by_tool_mcp[r.get("tool", "?")] += s
+        if calls:
+            print(
+                f"\nMCP response compression: {calls} calls, "
+                f"saved {saved_chars} chars ≈ {saved_chars // 4} output tok"
+            )
+            for tool, s in sorted(by_tool_mcp.items(), key=lambda kv: -kv[1])[:5]:
+                print(f"  {tool:<30} {s:>8} chars")
     return 0
 
 

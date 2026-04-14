@@ -14,6 +14,44 @@ import time
 from pathlib import Path
 
 
+_TOKENIZER_CACHE: dict = {}
+
+
+def _get_tokenizer():
+    """Return a callable(str) -> int, or None to fall back to char/4.
+
+    Controlled by GRUNT_TOKENIZER:
+      unset | "char4"   char count / 4 (default, no deps)
+      "tiktoken"        tiktoken cl100k_base (rough Anthropic proxy)
+      "anthropic"       anthropic.Anthropic().beta.messages.count_tokens
+    """
+    if "fn" in _TOKENIZER_CACHE:
+        return _TOKENIZER_CACHE["fn"]
+    mode = (os.environ.get("GRUNT_TOKENIZER") or "char4").lower()
+    fn = None
+    if mode == "tiktoken":
+        try:
+            import tiktoken  # type: ignore
+
+            enc = tiktoken.get_encoding("cl100k_base")
+            fn = lambda s: len(enc.encode(s))  # noqa: E731
+        except Exception:
+            fn = None
+    elif mode == "anthropic":
+        try:
+            import anthropic  # type: ignore
+
+            client = anthropic.Anthropic()
+            fn = lambda s: client.beta.messages.count_tokens(  # noqa: E731
+                model="claude-opus-4-6",
+                messages=[{"role": "user", "content": s}],
+            ).input_tokens
+        except Exception:
+            fn = None
+    _TOKENIZER_CACHE["fn"] = fn
+    return fn
+
+
 def estimate_tokens(obj) -> int:
     if obj is None:
         return 0
@@ -21,6 +59,12 @@ def estimate_tokens(obj) -> int:
         s = obj
     else:
         s = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    tok = _get_tokenizer()
+    if tok is not None:
+        try:
+            return max(1, int(tok(s)))
+        except Exception:
+            pass
     return max(1, len(s) // 4)
 
 

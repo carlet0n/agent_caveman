@@ -1,0 +1,1 @@
+Spawn one subagent to answer: "In the agent-caveman repo at the allowed directory, which Python file implements the GitHub MCP response trimmer, and what keys does it drop?" Report only the file path and the dropped keys. No narrative.
