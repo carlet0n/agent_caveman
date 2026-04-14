@@ -1,0 +1,10 @@
+{
+  "name": "agent-caveman",
+  "description": "Token-efficient multi-agent workflows for Claude Code. Compresses agent-to-agent channels: compact subagents with minimal tool whitelists, tool-output compression, and measurement hooks. Inspired by caveman, but for the orchestrator-to-subagent channel where prose is wasted.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Tim Carleton"
+  },
+  "license": "MIT",
+  "keywords": ["tokens", "agents", "multi-agent", "compression", "observability"]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "agent-caveman",
+  "owner": {
+    "name": "Tim Carleton"
+  },
+  "metadata": {
+    "description": "Token-efficient multi-agent workflows for Claude Code",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "agent-caveman",
+      "source": "./agent-caveman",
+      "description": "Cuts tokens on agent-to-agent channels — compact subagents, tool-output compression, and measurement hooks."
+    }
+  ]
+}
