@@ -2,35 +2,30 @@
 
 Token-efficient multi-agent workflows for Claude Code.
 
-Caveman makes humans talk to Claude in fewer tokens. Agent Caveman makes *Claude talk to Claude* in fewer tokens — the orchestrator-to-subagent channel that multi-agent workflows burn through invisibly.
+Agent Caveman reduces token spend on the orchestrator-to-subagent channel that multi-agent workflows consume invisibly.
 
 ## What it does
 
-When you run multi-agent workflows in Claude Code (spawning subagents via the `Agent`/`Task` tool), three things quietly eat tokens:
+Multi-agent workflows in Claude Code (subagents spawned via `Agent`/`Task`) incur three token costs that compound quickly:
 
-1. **Subagent responses** — long narrative reports where the orchestrator only needed the facts
-2. **WebFetch responses** — in real sessions, WebFetch averages ~7,000 tokens per call and often dominates total token spend; disciplined extraction prompts cut that by an order of magnitude
-3. **Tool schemas** — the full tool list shipped to every subagent, even tools the subagent will never call
+1. **Subagent responses** — narrative reports where the orchestrator needs only the facts.
+2. **WebFetch responses** — frequently dominant in total token spend; disciplined extraction prompts reduce them by roughly an order of magnitude.
+3. **Tool schemas** — the full tool list delivered to every subagent, including tools it will never invoke.
 
-Agent Caveman attacks all three at the **source**: opinionated subagent definitions with minimal tool whitelists, a strict output contract in each subagent's system prompt, and a skill that teaches the lead agent to route to the right subagent and write tight WebFetch prompts. Hooks measure what each tool call actually costs so you can see what's working.
+Agent Caveman addresses each at the source: subagent definitions with minimal tool whitelists, a strict output contract in each subagent's system prompt, and a skill that routes the lead agent to the appropriate specialist and enforces tight WebFetch prompts. A `PreToolUse` hook rewrites loose `WebFetch` and `Agent` prompts before execution, appending extraction discipline when the prompt lacks it. A `PostToolUse` hook trims bloated GitHub MCP responses. Measurement hooks record per-call cost to local JSONL so the effect is auditable.
 
-This is not a transport-layer compressor. Claude Code's public hook contract does not allow rewriting the output of built-in tools before the model consumes it, so we don't pretend to. Every reduction you see comes from generating less in the first place.
+Built-in tool output is not rewritten: Claude Code's hook contract permits mutation only of MCP responses (`updatedMCPToolOutput`). Savings on built-in tools come from generating less in the first place.
 
 ## Install
 
-One line, no approval gate — Claude Code plugin marketplaces install from any public GitHub repo directly:
-
 ```bash
-claude plugin marketplace add carlet0n/agent_caveman && claude plugin install agent-caveman@agent-caveman
+claude plugin marketplace add carlet0n/agent_caveman
+claude plugin install agent-caveman@agent-caveman
 ```
 
-That's it. No mode to enable, no level to pick, no configuration. The `grunt-*` subagents become available to the orchestrator and the measurement hooks register automatically.
+No configuration. The `grunt-*` subagents become available to the orchestrator, hooks register automatically, and prompt rewriting is on by default (set `GRUNT_REWRITE=off` to disable).
 
-> Anthropic does not gate or review user marketplaces — any public GitHub repo works. (There is a separate opt-in curated marketplace Anthropic runs, which accepts submissions via `claude.ai/settings/plugins/submit`.)
-
-### Local development install
-
-To hack on the plugin, point Claude Code at a working copy:
+### Local development
 
 ```bash
 git clone https://github.com/carlet0n/agent_caveman.git
@@ -40,9 +35,9 @@ claude --plugin-dir ./agent-caveman
 
 ## Usage
 
-Nothing to invoke. The system operates on three layers, all automatic:
+The system operates on four automatic layers.
 
-**1. Specialized subagents.** When the orchestrator would normally spawn a `general-purpose` agent, it now has three tighter options:
+**1. Specialized subagents.** Three focused alternatives to `general-purpose`:
 
 | Agent             | Role                      | Tools                                        |
 |-------------------|---------------------------|----------------------------------------------|
@@ -50,14 +45,16 @@ Nothing to invoke. The system operates on three layers, all automatic:
 | `grunt-explorer`  | Read-only codebase survey | `Read`, `Grep`, `Glob`, `Bash` (inspection only) |
 | `grunt-coder`     | Execute scoped code edits | `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob` |
 
-Each ships a strict output contract in its system prompt (`RESULT / FINDINGS / FILES / NEXT` blocks), so returns are structured facts rather than prose. The tool whitelists shrink the schema payload delivered to each subagent — they cannot call tools not listed, and Claude Code does not ship descriptions for tools the subagent lacks.
+Each subagent declares a `RESULT / FINDINGS / FILES / NEXT` output contract in its system prompt. The tool whitelists reduce the schema payload: Claude Code does not ship descriptions for tools the subagent cannot invoke.
 
-**2. Orchestrator + subagent skills.** Two skills load on-demand:
+**2. Orchestrator and subagent skills.**
 
-- `grunt-orchestrator` — triggers when the lead agent spawns subagents or calls WebFetch. Provides a task-to-subagent routing table and teaches tight extraction prompts ("Return only X as a code block" instead of "Tell me about X"). WebFetch responses shrink dramatically when the prompt asks for the answer, not a summary of the page.
-- `grunt-terse` — can be invoked by any subagent before returning a final report to enforce the `RESULT / FINDINGS / NEXT` format.
+- `grunt-orchestrator` — activates when the lead agent spawns a subagent or calls WebFetch. Supplies a task-to-subagent routing table and extraction-prompt patterns.
+- `grunt-terse` — invoked by a subagent before returning its final report to enforce the `RESULT / FINDINGS / NEXT` format.
 
-**3. Measurement.** A `PreToolUse`/`PostToolUse` pair writes one JSONL record per tool call to `.grunt/metrics.jsonl` in whichever project you're working in. Check your spend in-session:
+**3. Prompt rewriter.** A `PreToolUse` hook appends an extraction contract to `WebFetch` and `Agent`/`Task` prompts that lack one. Each rewrite is recorded to `.grunt/rewrites.jsonl` with the full before/after.
+
+**4. Measurement.** A `PreToolUse`/`PostToolUse` pair writes one JSONL record per tool call to `.grunt/metrics.jsonl` within the active project. In-session report:
 
 ```
 /agent-caveman:grunt-stats
@@ -83,20 +80,30 @@ Bash                      17      1449      1805       106
 subagent return cost (tok per call):
   general-purpose      n=4 avg=432 max=679
   claude-code-guide    n=4 avg=308 max=374
-  grunt-*              (structured reports, avg ~250)
+
+noisy Bash (>1000 tok out):
+    2341 tok  find . -name "*.py"
+full-file Reads (>2000 tok, no offset/limit):
+    4621 tok  /path/to/big_file.txt
+repeated Reads (≥3× same file):
+  n=  3  /path/to/README.md
+oversized subagent returns (>500 tok):
+     679 tok  general-purpose        Build grunt-orchestrator skill
+
+prompt rewrites applied: 2
+  WebFetch             n=1
+  Agent                n=1
 ```
 
-Filter by session with `--session <id>`.
-
-The numbers are character-length-over-four estimates — suitable for comparison across sessions, not for billing.
+Filter by session with `--session <id>`. Token counts are `len(s)//4` estimates intended for cross-session comparison, not billing reconciliation.
 
 ## How it works
 
 ### Subagents
 
-`agent-caveman/agents/*.md` defines each subagent with a `tools:` frontmatter whitelist. Claude Code enforces the whitelist, so each subagent's system context only carries schemas for the tools it can actually use.
+`agent-caveman/agents/*.md` defines each subagent with a `tools:` frontmatter whitelist enforced by Claude Code. The subagent's system context carries schemas only for tools it can invoke.
 
-Each subagent's system prompt enforces a compact report format. The orchestrator gets:
+Each subagent's system prompt enforces a compact report format:
 
 ```
 RESULT: done
@@ -106,23 +113,23 @@ FINDINGS:
 NEXT: none
 ```
 
-Rather than a three-paragraph narrative that restates the question.
-
 ### Hooks
 
-One measurement hook wired via the plugin's `hooks/hooks.json`:
+Two hooks wired via the plugin's `hooks/hooks.json`:
 
-- `grunt_log.py` — records `{tool, input_tokens, output_tokens, metadata}` per call to `.grunt/metrics.jsonl`
+- `grunt_log.py` (`PreToolUse` + `PostToolUse`, all tools) — records `{tool, input_tokens, output_tokens, metadata}` per call to `.grunt/metrics.jsonl`
+- `grunt_rewrite.py` (`PreToolUse`, `WebFetch|Agent|Task`) — mutates `tool_input.prompt` via `updatedInput` when the prompt lacks discipline markers. Appends a terse-extraction contract to loose `WebFetch` prompts and a 200-word cap to `Agent`/`Task` prompts missing one. Every rewrite logged to `.grunt/rewrites.jsonl` with the full before/after. Disable per-session with `GRUNT_REWRITE=off`.
+- `grunt_mcp_github.py` (`PostToolUse`, `mcp__github__.*`) — trims GitHub MCP tool responses via `updatedMCPToolOutput`. Drops `*_url` fields, `node_id`, `avatar_url`, `reactions`, and other rarely-read metadata; compacts `user` objects to `{login}` and `labels` to name arrays. Typical reduction is 60–75% on list payloads. Logged to `.grunt/mcp_compress.jsonl`. Disable with `GRUNT_MCP_COMPRESS=off`. Only activates if the GitHub MCP server is installed.
 
 Pure Python 3 standard library. No dependencies, no network calls. Everything stays local to your project's `.grunt/` directory.
 
-### What we don't do
+### Non-goals
 
-- **No built-in tool output mutation.** Claude Code's hook contract only allows rewriting MCP tool responses (`updatedMCPToolOutput`). Built-in tools — Bash, Read, Edit, WebFetch, Agent — cannot be rewritten before the model sees them. A "compressor" that modified them would be silently ignored, so we don't ship one. All savings are at the source.
-- **No MCP wrapper of built-in tools.** Could technically bypass the above, but wrapping Edit/Read behind our own server disables Claude Code's permission enforcement (e.g. Edit's "must Read first" rule). Not worth the security regression for modest schema savings.
-- **No parameter renaming.** Research showed cryptic names (`file_path` → `p`) save <2% of tokens while measurably hurting tool-call accuracy.
-- **No LLM-based rewriting.** Every reduction is deterministic and inspectable.
-- **No cross-session learning.** Metrics stay local, per-project, JSONL. Inspect them yourself.
+- **Built-in tool output mutation.** Claude Code's hook contract permits post-execution mutation only for MCP tools (`updatedMCPToolOutput`). Built-in tool output — Bash, Read, Edit, WebFetch, Agent — is immutable to hooks.
+- **MCP wrapping of built-in tools.** Would bypass Claude Code's permission enforcement (e.g. the "Read before Edit" constraint) for modest schema savings.
+- **Parameter renaming.** Shortening argument names (`file_path` → `p`) saves under 2% of tokens and measurably degrades tool-call accuracy.
+- **LLM-based rewriting.** All reductions are deterministic and inspectable.
+- **Cross-session learning.** Metrics are local, per-project JSONL.
 
 ## Repository layout
 
@@ -136,6 +143,8 @@ Pure Python 3 standard library. No dependencies, no network calls. Everything st
 │   ├── hooks/
 │   │   ├── hooks.json          # hook registrations
 │   │   ├── grunt_log.py        # PreToolUse/PostToolUse token logger
+│   │   ├── grunt_rewrite.py    # PreToolUse prompt discipline rewriter
+│   │   ├── grunt_mcp_github.py # PostToolUse GitHub MCP response trimmer
 │   │   └── grunt_report.py     # summary CLI
 │   ├── agents/
 │   │   ├── grunt-researcher.md
@@ -157,6 +166,9 @@ Pure Python 3 standard library. No dependencies, no network calls. Everything st
 | Three specialized subagents (`grunt-researcher`, `grunt-explorer`, `grunt-coder`) | Shipped |
 | `grunt-orchestrator` skill (subagent routing + WebFetch prompt discipline) | Shipped |
 | `grunt-terse` skill (compact output contract) | Shipped |
+| PreToolUse prompt rewriter for WebFetch/Agent/Task | Shipped |
+| `/grunt-stats` diagnostics: noisy Bash, full-file Reads, repeated Reads, oversized subagents | Shipped |
+| GitHub MCP response compressor | Shipped |
 
 ## License
 
@@ -164,4 +176,4 @@ MIT.
 
 ## Credits
 
-Inspired by [caveman](https://github.com/JuliusBrussee/caveman) by Julius Brussee, which compresses human-facing Claude output. Agent Caveman extends the idea to the agent-to-agent channel, where prose is wasted and structure is king.
+Inspired by [caveman](https://github.com/JuliusBrussee/caveman) by Julius Brussee, which compresses human-facing Claude output. Agent Caveman applies the same principle to the agent-to-agent channel.

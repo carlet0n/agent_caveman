@@ -9,6 +9,15 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/grunt_log.py\""
           }
         ]
+      },
+      {
+        "matcher": "WebFetch|Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/grunt_rewrite.py\""
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -18,6 +27,15 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/grunt_log.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__github__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/grunt_mcp_github.py\""
           }
         ]
       }

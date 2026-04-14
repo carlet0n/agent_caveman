@@ -61,6 +61,11 @@ def main() -> int:
             record["cmd"] = (tool_input.get("command") or "")[:120]
         elif tool_name in ("Read", "Edit", "Write"):
             record["path"] = tool_input.get("file_path", "")
+            if tool_name == "Read":
+                record["scoped"] = (
+                    tool_input.get("offset") is not None
+                    or tool_input.get("limit") is not None
+                )
 
     out_dir = project_root() / ".grunt"
     out_dir.mkdir(exist_ok=True)
