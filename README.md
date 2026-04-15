@@ -111,8 +111,12 @@ Medians from 5 reps per task (Opus 4.6, 2026-04):
 | Task              | Δ total_input | Δ output_tokens | Exercises                                |
 |-------------------|---------------|------------------|------------------------------------------|
 | `repo_survey`     | **−29.0%**    | **−42.9%**       | Subagent tool-whitelist + output contract |
+| `github_mcp`      | **−6.2%**     | +0.4%            | GitHub MCP response compressor (~3.5k tok saved per MCP call, ~47% per response) |
 | `multi_agent`     | −0.0%         | −8.3%            | Subagent schema footprint                |
+| `fan_out`         | +0.3%         | +3.9%            | 5× subagent spawn; both variants use `grunt-explorer` so only rewriter cost is measured |
 | `webfetch_summary`| +4.3%         | +1.6%            | WebFetch prompt rewriter                  |
+
+`fan_out` and `webfetch_summary` turning slightly positive is the honest cost of the rewriter's extraction-contract append when the workload doesn't also harvest savings elsewhere. A proper A/B of the whitelist slice requires two prompts (baseline → `general-purpose`, treatment → `grunt-explorer`) — see `bench/README.md`.
 
 Signal: savings scale with subagent turn count × tools-not-needed. Repo-survey workflows (enumerate, audit, delegate file reads) benefit most. Single-shot tasks with already-tight WebFetch prompts lose a small amount to the rewriter's extraction contract.
 
