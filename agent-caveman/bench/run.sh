@@ -15,9 +15,15 @@ set -euo pipefail
 
 TASK="${1:-}"
 LABEL="${2:-$(basename "${TASK%.*}")}"
+TREAT_TASK="${TREATMENT_TASK:-$TASK}"
 
 if [ -z "$TASK" ] || [ ! -f "$TASK" ]; then
   echo "usage: $0 <task-file> [label]" >&2
+  echo "  set TREATMENT_TASK=<file> to use a different prompt for the treatment run" >&2
+  exit 2
+fi
+if [ ! -f "$TREAT_TASK" ]; then
+  echo "TREATMENT_TASK file not found: $TREAT_TASK" >&2
   exit 2
 fi
 
@@ -28,11 +34,12 @@ BASE_DIR="$RUN_ROOT/baseline"
 TREAT_DIR="$RUN_ROOT/treatment"
 mkdir -p "$BASE_DIR" "$TREAT_DIR"
 
-PROMPT="$(cat "$TASK")"
+BASE_PROMPT="$(cat "$TASK")"
+TREAT_PROMPT="$(cat "$TREAT_TASK")"
 
 run_one() {
-  local variant="$1" proj="$2"
-  shift 2
+  local variant="$1" proj="$2" prompt="$3"
+  shift 3
   echo "[$variant] project=$proj"
   (
     cd "$proj"
@@ -40,13 +47,13 @@ run_one() {
       --add-dir "$REPO_ROOT" \
       --plugin-dir "$PLUGIN_DIR" \
       --dangerously-skip-permissions \
-      "$PROMPT" > "$proj/stdout.txt" 2> "$proj/stderr.txt" || true
+      "$prompt" > "$proj/stdout.txt" 2> "$proj/stderr.txt" || true
   )
   echo "[$variant] done ($(wc -c <"$proj/stdout.txt") bytes stdout)"
 }
 
-run_one baseline  "$BASE_DIR"  env GRUNT_REWRITE=off GRUNT_MCP_COMPRESS=off
-run_one treatment "$TREAT_DIR"
+run_one baseline  "$BASE_DIR"  "$BASE_PROMPT"  env GRUNT_REWRITE=off GRUNT_MCP_COMPRESS=off
+run_one treatment "$TREAT_DIR" "$TREAT_PROMPT"
 
 echo
 python3 "$PLUGIN_DIR/bench/compare.py" \

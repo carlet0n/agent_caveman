@@ -13,11 +13,24 @@ REPS="${2:-5}"
 
 if [ -z "$TASK" ] || [ ! -f "$TASK" ]; then
   echo "usage: $0 <task-file> [reps=5]" >&2
+  echo "  pair tasks by convention: <stem>.baseline.md + <stem>.treatment.md" >&2
+  echo "  — point at the .baseline.md file; the treatment sibling is auto-detected" >&2
   exit 2
 fi
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 STEM="$(basename "${TASK%.*}")"
+
+# Paired task convention: if TASK ends in .baseline.md and a sibling
+# .treatment.md exists, run them as a two-prompt A/B.
+if [[ "$TASK" == *.baseline.md ]]; then
+  TREAT_SIBLING="${TASK%.baseline.md}.treatment.md"
+  if [ -f "$TREAT_SIBLING" ]; then
+    export TREATMENT_TASK="$TREAT_SIBLING"
+    STEM="$(basename "${STEM%.baseline}")"
+    echo "paired run: baseline=$TASK treatment=$TREAT_SIBLING"
+  fi
+fi
 
 for i in $(seq 1 "$REPS"); do
   echo "=== $STEM rep $i/$REPS ==="

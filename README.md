@@ -99,39 +99,43 @@ Filter by session with `--session <id>`. The report leads with **authoritative u
 
 ### Benchmarking savings
 
-A reproducible A/B harness lives under `agent-caveman/bench/`. Each bench runs the same fixed task twice — once with plugin effects disabled (`GRUNT_REWRITE=off GRUNT_MCP_COMPRESS=off`), once with defaults — into isolated project dirs. `compare.py` reads each run's Claude Code session transcript and appends one row per run to `bench/history.jsonl`; `median.py` aggregates by task.
+A reproducible A/B harness lives under `agent-caveman/bench/`. Each bench runs the same fixed task twice — once with plugin effects disabled (`GRUNT_REWRITE=off GRUNT_MCP_COMPRESS=off`), once with defaults — into isolated project dirs. `compare.py` reads each run's Claude Code session transcript and appends one row per run to `bench/history.jsonl`; `median.py` aggregates by task and reports median Δ with IQR.
 
 ```bash
-./agent-caveman/bench/run_reps.sh agent-caveman/bench/tasks/repo_survey.md 5
+./agent-caveman/bench/run_reps.sh agent-caveman/bench/tasks/github_mcp.md 5
 python3 agent-caveman/bench/median.py
 ```
 
-Medians from 5 reps per task (Opus 4.6, 2026-04):
+Current medians (Opus 4.6, 2026-04). IQR is the interquartile spread of per-rep Δ% — when `|median| < IQR`, treat the median as noise. Every row also reports `rw` (rewrites fired in treatment) and `mcp_saved_tok` (chars/4 from the MCP compressor); a row with both zero means **no plugin mechanism fired**, and any delta is model non-determinism.
 
-| Task              | Δ total_input | Δ output_tokens | Exercises                                |
-|-------------------|---------------|------------------|------------------------------------------|
-| `repo_survey`     | **−29.0%**    | **−42.9%**       | Subagent tool-whitelist + output contract |
-| `github_mcp`      | **−6.2%**     | +0.4%            | GitHub MCP response compressor (~3.5k tok saved per MCP call, ~47% per response) |
-| `multi_agent`     | −0.0%         | −8.3%            | Subagent schema footprint                |
-| `fan_out`         | +0.3%         | +3.9%            | 5× subagent spawn; both variants use `grunt-explorer` so only rewriter cost is measured |
-| `webfetch_summary`| +4.3%         | +1.6%            | WebFetch prompt rewriter                  |
+| Task               | N  | Δ input (median, IQR) | Δ output (median, IQR) | rw_avg | mcp_saved_tok | What fired |
+|--------------------|----|------------------------|-------------------------|--------|---------------|------------|
+| `github_mcp`       | 10 | **−4.4%**, 6.2pp       | +0.3%, 2.8pp            | 0      | ~1,800        | MCP compressor (~3.5k tok saved per MCP call post-fix, ~47% per response) |
+| `fan_out_ab`       | 5  | +2.0%, 0.3pp           | −0.2%, 6.4pp            | 5.0    | 0             | Paired-prompt whitelist A/B (baseline→`general-purpose`, treatment→`grunt-explorer`) + rewriter × 5 |
+| `fan_out`          | 5  | +0.4%, 5.9pp           | +3.1%, 4.7pp            | 5.0    | 0             | Single-prompt (both pick `grunt-explorer`) → only rewriter cost |
+| `webfetch_summary` | 6  | +7.4%, 8.0pp           | +2.4%, 11.7pp           | 9.3    | 0             | WebFetch rewriter ×9 per rep |
+| `multi_agent`      | 5  | −0.0%, 0.6pp           | −1.6%, 49.3pp           | 1.0    | 0             | One subagent spawn + 1 rewrite |
+| `_noop_control`    | 5  | −29.0%, 33.6pp         | −42.9%, 33.4pp          | **0**  | **0**         | Nothing — noise floor only |
 
-`fan_out` and `webfetch_summary` turning slightly positive is the honest cost of the rewriter's extraction-contract append when the workload doesn't also harvest savings elsewhere. A proper A/B of the whitelist slice requires two prompts (baseline → `general-purpose`, treatment → `grunt-explorer`) — see `bench/README.md`.
+Honest read:
 
-Signal: savings scale with subagent turn count × tools-not-needed. Repo-survey workflows (enumerate, audit, delegate file reads) benefit most. Single-shot tasks with already-tight WebFetch prompts lose a small amount to the rewriter's extraction contract.
+- **`github_mcp` is the one confirmed win.** The compressor demonstrably strips ~47% of each GitHub MCP response, logged byte-for-byte in `.grunt/mcp_compress.jsonl`. IQR 6.2pp overlaps zero but a single MCP-heavy session can save tens of thousands of tokens.
+- **The prompt rewriter currently costs more than it saves** on every workload we've tested. Each `WebFetch|Agent|Task` rewrite appends an extraction contract to the input; for tasks whose output was already going to be terse, the added input isn't repaid by output shrinkage.
+- **The subagent whitelist has not demonstrated net savings yet.** `fan_out_ab` (the clean A/B: `general-purpose` vs `grunt-explorer` with everything else identical) shows +2.0% input with tight IQR. Possible explanations: (a) schema-cache behavior means the raw byte delta doesn't translate to billed tokens, (b) `grunt-explorer`'s custom system prompt offsets the tool-list savings, or (c) five 1-turn subagent spawns don't amortize enough. A 20-rep `deep_explore` task (one subagent, long internal loop) is running to probe this.
+- **`_noop_control` demonstrates the noise floor.** It invokes only Read/Grep/Glob, which neither hook touches, so baseline and treatment run identical code paths. Any delta there — including the −29% — is pure sampling variation; the 33.6pp IQR makes that obvious. Use it to sanity-check other medians: if your effect is smaller than the noise floor IQR, it isn't an effect.
 
-Workflows that benefit:
+`bench/schema_size.py` prints the static tool-schema ceiling per subagent type. That's an upper bound, not a measured saving.
 
-- Codebase surveys, audits, compliance sweeps
-- Architecture/doc generation from source
-- Bug triage that delegates to subagents repeatedly
-- Refactor planning (explorer → coder handoff)
-- PR review of large diffs
+Where savings should show up in principle (when the `deep_explore` bench completes, we'll know whether they do):
 
-Workflows that don't:
+- GitHub MCP–heavy sessions (confirmed)
+- Long single-subagent explorations with many internal turns (pending)
+- Workflows that spawn many subagents each doing multiple turns (pending)
 
-- Short single-turn Q&A with no subagents
-- Pure WebFetch tasks whose answers are already terse
+Where the plugin currently has no path to help:
+
+- One-shot Q&A with no subagents, no MCP, no WebFetch
+- Short WebFetch tasks whose answers were already brief
 
 See `agent-caveman/bench/README.md` for methodology and caveats (model is non-deterministic; run ≥5 reps and compare medians).
 

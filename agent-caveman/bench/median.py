@@ -62,26 +62,65 @@ def main() -> int:
         return 0
 
     hdr = (
-        f"{'task':<28} {'n':>3}  {'med_base_in':>11} {'med_treat_in':>12} {'Δin%':>8}"
-        f"  {'med_base_out':>12} {'med_treat_out':>13} {'Δout%':>8}  {'rw_avg':>6}"
+        f"{'task':<24} {'n':>3}  {'med_Δin':>8} {'IQR_Δin':>9}  {'med_Δout':>9} {'IQR_Δout':>9}"
+        f"  {'rw_avg':>6}  {'mcp_saved_tok':>13}"
     )
     print(hdr)
     print("-" * len(hdr))
     for stem in sorted(groups):
         rows = groups[stem]
         n = len(rows)
-        base_in = [int((r.get("baseline") or {}).get("total_input", 0)) for r in rows]
-        treat_in = [int((r.get("treatment") or {}).get("total_input", 0)) for r in rows]
-        base_out = [int((r.get("baseline") or {}).get("output_tokens", 0)) for r in rows]
-        treat_out = [int((r.get("treatment") or {}).get("output_tokens", 0)) for r in rows]
+        dins = [
+            int((r.get("treatment") or {}).get("total_input", 0))
+            - int((r.get("baseline") or {}).get("total_input", 0))
+            for r in rows
+        ]
+        douts = [
+            int((r.get("treatment") or {}).get("output_tokens", 0))
+            - int((r.get("baseline") or {}).get("output_tokens", 0))
+            for r in rows
+        ]
+        din_pcts = [
+            _pct_raw(
+                int((r.get("baseline") or {}).get("total_input", 0)),
+                int((r.get("treatment") or {}).get("total_input", 0)),
+            )
+            for r in rows
+        ]
+        dout_pcts = [
+            _pct_raw(
+                int((r.get("baseline") or {}).get("output_tokens", 0)),
+                int((r.get("treatment") or {}).get("output_tokens", 0)),
+            )
+            for r in rows
+        ]
         rw = [int((r.get("rewrites") or {}).get("treatment", 0)) for r in rows]
-        mbi, mti = statistics.median(base_in), statistics.median(treat_in)
-        mbo, mto = statistics.median(base_out), statistics.median(treat_out)
+        mcp = [
+            int((r.get("mcp_compress") or {}).get("treatment_saved_chars", 0)) // 4
+            for r in rows
+        ]
+        med_din = statistics.median(din_pcts)
+        med_dout = statistics.median(dout_pcts)
+        iqr_din = _iqr(din_pcts)
+        iqr_dout = _iqr(dout_pcts)
         print(
-            f"{stem[:28]:<28} {n:>3}  {int(mbi):>11} {int(mti):>12} {_pct(mbi, mti):>8}"
-            f"  {int(mbo):>12} {int(mto):>13} {_pct(mbo, mto):>8}  {statistics.mean(rw):>6.1f}"
+            f"{stem[:24]:<24} {n:>3}  {med_din:>+7.1f}% {iqr_din:>8.1f}%  "
+            f"{med_dout:>+8.1f}% {iqr_dout:>8.1f}%  {statistics.mean(rw):>6.1f}  {int(statistics.mean(mcp)):>13}"
         )
     return 0
+
+
+def _pct_raw(a: int, b: int) -> float:
+    if not a:
+        return 0.0
+    return (b - a) / a * 100
+
+
+def _iqr(xs: list[float]) -> float:
+    if len(xs) < 2:
+        return 0.0
+    q = statistics.quantiles(xs, n=4)
+    return q[2] - q[0]
 
 
 if __name__ == "__main__":
