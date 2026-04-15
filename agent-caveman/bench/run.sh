@@ -49,7 +49,7 @@ run_one baseline  "$BASE_DIR"  env GRUNT_REWRITE=off GRUNT_MCP_COMPRESS=off
 run_one treatment "$TREAT_DIR"
 
 echo
-echo "compare with:"
-echo "  python3 $PLUGIN_DIR/bench/compare.py \\"
-echo "    --baseline  $BASE_DIR \\"
-echo "    --treatment $TREAT_DIR"
+python3 "$PLUGIN_DIR/bench/compare.py" \
+  --baseline  "$BASE_DIR" \
+  --treatment "$TREAT_DIR" \
+  --label "$LABEL"

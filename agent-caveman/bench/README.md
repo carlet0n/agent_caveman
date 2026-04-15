@@ -18,12 +18,27 @@ That produces two project dirs under `bench/runs/<label>-<timestamp>/`
 Both runs use `claude -p --plugin-dir <repo>/agent-caveman
 --dangerously-skip-permissions`.
 
+`run.sh` auto-invokes `compare.py` at the end and appends one summary row
+to `bench/history.jsonl` so results accumulate across runs.
+
 ## Compare
 
 ```bash
 python3 bench/compare.py \
   --baseline  bench/runs/<label>/baseline \
   --treatment bench/runs/<label>/treatment
+```
+
+Appends to `bench/history.jsonl` by default. Pass `--history ''` to skip,
+or `--history <path>` to redirect.
+
+## History
+
+```bash
+python3 bench/history.py                # table of all past runs
+python3 bench/history.py --label webfetch
+python3 bench/history.py --tail 20
+python3 bench/history.py --json         # raw JSONL
 ```
 
 Output sections:

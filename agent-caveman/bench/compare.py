@@ -13,6 +13,7 @@ Run bench/run.sh to produce the two project dirs, then pass them here.
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import sys
 from collections import defaultdict
@@ -83,6 +84,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--baseline", required=True, type=Path)
     ap.add_argument("--treatment", required=True, type=Path)
+    ap.add_argument(
+        "--history",
+        type=Path,
+        default=Path(__file__).resolve().parent / "history.jsonl",
+        help="append one JSONL summary row here (default: bench/history.jsonl). Pass empty string to skip.",
+    )
+    ap.add_argument("--label", default=None, help="label for history row (default: run-dir name)")
     args = ap.parse_args()
 
     a = _transcript_totals(args.baseline)
@@ -124,6 +132,30 @@ def main() -> int:
         f"mcp compress calls/chars  base={mca}/{msaveda}  treat={mcb}/{msavedb}"
         f"  (≈ {msavedb // 4} tok saved in treatment)"
     )
+
+    if str(args.history):
+        run_dir = args.baseline.parent if args.baseline.parent == args.treatment.parent else None
+        label = args.label or (run_dir.name if run_dir else args.baseline.name)
+        row = {
+            "ts": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+            "label": label,
+            "run_dir": str(run_dir) if run_dir else None,
+            "baseline": {k: int(a.get(k, 0)) for k in (
+                "turns", "input_tokens", "cache_read_input_tokens",
+                "cache_creation_input_tokens", "total_input", "output_tokens")},
+            "treatment": {k: int(b.get(k, 0)) for k in (
+                "turns", "input_tokens", "cache_read_input_tokens",
+                "cache_creation_input_tokens", "total_input", "output_tokens")},
+            "rewrites": {"baseline": rwa, "treatment": rwb},
+            "mcp_compress": {
+                "baseline_calls": mca, "baseline_saved_chars": msaveda,
+                "treatment_calls": mcb, "treatment_saved_chars": msavedb,
+            },
+        }
+        args.history.parent.mkdir(parents=True, exist_ok=True)
+        with args.history.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+        print(f"\nappended history row → {args.history}")
     return 0
 
 

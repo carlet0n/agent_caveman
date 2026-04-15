@@ -99,16 +99,37 @@ Filter by session with `--session <id>`. The report leads with **authoritative u
 
 ### Benchmarking savings
 
-A reproducible A/B harness lives under `agent-caveman/bench/`. Each bench runs the same fixed task twice — once with plugin effects disabled (`GRUNT_REWRITE=off GRUNT_MCP_COMPRESS=off`), once with defaults — into isolated project dirs:
+A reproducible A/B harness lives under `agent-caveman/bench/`. Each bench runs the same fixed task twice — once with plugin effects disabled (`GRUNT_REWRITE=off GRUNT_MCP_COMPRESS=off`), once with defaults — into isolated project dirs. `compare.py` reads each run's Claude Code session transcript and appends one row per run to `bench/history.jsonl`; `median.py` aggregates by task.
 
 ```bash
-./agent-caveman/bench/run.sh agent-caveman/bench/tasks/webfetch_summary.md
-python3 agent-caveman/bench/compare.py \
-  --baseline  agent-caveman/bench/runs/<label>/baseline \
-  --treatment agent-caveman/bench/runs/<label>/treatment
+./agent-caveman/bench/run_reps.sh agent-caveman/bench/tasks/repo_survey.md 5
+python3 agent-caveman/bench/median.py
 ```
 
-`compare.py` reads each run's Claude Code session transcript and prints side-by-side authoritative usage plus per-tool deltas and plugin-effect counters. See `agent-caveman/bench/README.md` for methodology and caveats (model is non-deterministic; run each task 3–5× and compare medians).
+Medians from 5 reps per task (Opus 4.6, 2026-04):
+
+| Task              | Δ total_input | Δ output_tokens | Exercises                                |
+|-------------------|---------------|------------------|------------------------------------------|
+| `repo_survey`     | **−29.0%**    | **−42.9%**       | Subagent tool-whitelist + output contract |
+| `multi_agent`     | −0.0%         | −8.3%            | Subagent schema footprint                |
+| `webfetch_summary`| +4.3%         | +1.6%            | WebFetch prompt rewriter                  |
+
+Signal: savings scale with subagent turn count × tools-not-needed. Repo-survey workflows (enumerate, audit, delegate file reads) benefit most. Single-shot tasks with already-tight WebFetch prompts lose a small amount to the rewriter's extraction contract.
+
+Workflows that benefit:
+
+- Codebase surveys, audits, compliance sweeps
+- Architecture/doc generation from source
+- Bug triage that delegates to subagents repeatedly
+- Refactor planning (explorer → coder handoff)
+- PR review of large diffs
+
+Workflows that don't:
+
+- Short single-turn Q&A with no subagents
+- Pure WebFetch tasks whose answers are already terse
+
+See `agent-caveman/bench/README.md` for methodology and caveats (model is non-deterministic; run ≥5 reps and compare medians).
 
 ## How it works
 

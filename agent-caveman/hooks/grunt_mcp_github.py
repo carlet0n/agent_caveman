@@ -97,11 +97,11 @@ def compress_response(resp):
         new = json.dumps(trimmed, ensure_ascii=False, separators=(",", ":"))
         return new, len(resp), len(new)
 
-    if isinstance(resp, dict) and isinstance(resp.get("content"), list):
+    def _walk_items(items):
         before = after = 0
-        new_content = []
+        out = []
         changed = False
-        for item in resp["content"]:
+        for item in items:
             if isinstance(item, dict) and item.get("type") == "text":
                 txt = item.get("text", "")
                 parsed, ok = _try_parse(txt)
@@ -112,11 +112,21 @@ def compress_response(resp):
                     before += len(txt)
                     after += len(new_txt)
                     changed = True
-                    new_content.append({**item, "text": new_txt})
+                    out.append({**item, "text": new_txt})
                     continue
-            new_content.append(item)
+            out.append(item)
+        return out, before, after, changed
+
+    if isinstance(resp, list):
+        new_items, before, after, changed = _walk_items(resp)
         if changed:
-            return {**resp, "content": new_content}, before, after
+            return new_items, before, after
+        return resp, 0, 0
+
+    if isinstance(resp, dict) and isinstance(resp.get("content"), list):
+        new_items, before, after, changed = _walk_items(resp["content"])
+        if changed:
+            return {**resp, "content": new_items}, before, after
     return resp, 0, 0
 
 
